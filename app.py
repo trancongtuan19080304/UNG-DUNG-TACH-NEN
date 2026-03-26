@@ -34,15 +34,33 @@ def _resize_keep_aspect(img: Image.Image, max_side: int) -> Image.Image:
     return img.resize((new_w, new_h), Image.LANCZOS)
 
 
+def _center_crop_square(img: Image.Image) -> Image.Image:
+    """Cắt giữa thành hình vuông (giữ tỉ lệ, không méo)."""
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    return img.crop((left, top, left + side, top + side))
+
+
+def _resize_exact(img: Image.Image, size: int) -> Image.Image:
+    """Resize đúng WxH = size x size."""
+    return img.resize((size, size), Image.LANCZOS)
+
+
 @st.cache_data(show_spinner=False)
-def process_image(image_bytes: bytes, max_side: int) -> bytes:
+def process_image(image_bytes: bytes, resize_mode: str, max_side: int, square_size: int) -> bytes:
     """
     Trả về bytes PNG (nền trong suốt).
 
     Lưu ý: rembg có thể tải model lần đầu, nên lần đầu chạy có thể chậm.
     """
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-    img = _resize_keep_aspect(img, max_side=max_side)
+    if resize_mode == "Giữ tỉ lệ":
+        img = _resize_keep_aspect(img, max_side=max_side)
+    elif resize_mode == "Ảnh vuông 1000×1000 (cắt giữa)":
+        img = _center_crop_square(img)
+        img = _resize_exact(img, size=square_size)
 
     # rembg cần bytes ảnh đã được encode (thường là PNG/JPG), không phải raw RGBA.
     buf = io.BytesIO()
@@ -55,14 +73,48 @@ def process_image(image_bytes: bytes, max_side: int) -> bytes:
 
 with st.sidebar:
     st.header("Tùy chọn")
-    max_side = st.number_input(
-        "Giới hạn cạnh dài nhất (px)",
-        min_value=256,
-        max_value=4000,
-        value=1600,
-        step=64,
-        help="Giảm kích thước ảnh để xử lý nhanh hơn.",
+    resize_mode = st.selectbox(
+        "Kiểu kích thước",
+        options=["Giữ tỉ lệ", "Ảnh vuông 1000×1000 (cắt giữa)"],
+        index=0,
     )
+
+    size_mode = st.selectbox(
+        "Kích thước xử lý (cạnh dài nhất)",
+        options=[
+            "Giữ nguyên",
+            "512 px",
+            "768 px",
+            "1024 px",
+            "1600 px (khuyên dùng)",
+            "2048 px",
+            "Tự nhập...",
+        ],
+        index=4,
+        help="Chỉ áp dụng khi chọn “Giữ tỉ lệ”.",
+    )
+
+    preset_map = {
+        "Giữ nguyên": 4000,
+        "512 px": 512,
+        "768 px": 768,
+        "1024 px": 1024,
+        "1600 px (khuyên dùng)": 1600,
+        "2048 px": 2048,
+    }
+
+    if size_mode == "Tự nhập...":
+        max_side = st.number_input(
+            "Nhập cạnh dài nhất (px)",
+            min_value=256,
+            max_value=4000,
+            value=1600,
+            step=64,
+        )
+    else:
+        max_side = preset_map[size_mode]
+
+    square_size = 1000
 
 
 uploaded = st.file_uploader(
@@ -79,7 +131,9 @@ input_bytes = uploaded.read()
 
 try:
     with st.spinner("Đang tách nền..."):
-        output_bytes = process_image(input_bytes, int(max_side))
+        output_bytes = process_image(
+            input_bytes, resize_mode=resize_mode, max_side=int(max_side), square_size=int(square_size)
+        )
 
     original_img = Image.open(io.BytesIO(input_bytes)).convert("RGBA")
 
